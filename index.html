@@ -229,12 +229,19 @@ function gh(path, opt = {}) {
   });
 }
 
+// Without a token a public repo is still readable, but GitHub allows only
+// 60 anonymous requests an hour: poll once a minute until a token is set.
+let lastAnon = 0;
 async function pollPc() {
-  if (!cfg.token) { pcErr = 'no token, open Setup'; renderPc(); return; }
+  if (!cfg.token) {
+    if (Date.now() - lastAnon < 61000) { renderPc(); return; }
+    lastAnon = Date.now();
+  }
   try {
     const r = await gh('/contents/packets.json?ref=live', { headers: Object.assign({ 'Accept': 'application/vnd.github.raw+json' }, etag ? { 'If-None-Match': etag } : {}) });
     if (r.status === 304) { lastPollOk = Date.now(); pcErr = null; renderPc(); return; }
-    if (!r.ok) { pcErr = r.status === 404 ? 'no data from the PC yet (live branch missing)' : r.status === 401 ? 'token rejected' : 'GitHub ' + r.status; renderPc(); return; }
+    if (!r.ok) { pcErr = r.status === 404 ? (cfg.token ? 'no data from the PC yet (live branch missing)' : 'repo private: add a token in Setup')
+      : r.status === 401 ? 'token rejected' : r.status === 403 ? (cfg.token ? 'GitHub 403' : 'rate limited: add a token in Setup') : 'GitHub ' + r.status; renderPc(); return; }
     etag = r.headers.get('etag');
     pc = await r.json();
     lastPollOk = Date.now(); pcErr = null;
@@ -323,7 +330,7 @@ function renderPc() {
   const age = pc ? Date.now() / 1000 - pc.updated : null;
   const ok = !pcErr && pc && age < 90;
   $('dPc').className = 'dot ' + (ok ? 'ok' : pcErr ? 'bad' : 'warn');
-  $('tPc').textContent = pcErr ? 'PC: ' + pcErr : pc ? 'PC ' + fmt(age, 0, ' s') : 'PC';
+  $('tPc').textContent = pcErr ? 'PC: ' + pcErr : pc ? 'PC ' + fmt(age, 0, ' s') + (cfg.token ? '' : ' · slow, no token') : 'PC';
   if (pc && pc.rx && pc.rx.ok === false) banner('Receiver stopped on the PC: ' + (pc.rx.error || ''));
   render();
 }
