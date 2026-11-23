@@ -1,0 +1,273 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LR-FHSS Range Monitor</title>
+<style>
+:root {
+  color-scheme: light;
+  --bg: #f3f4f2; --surface-1: #fcfcfb; --line: #e2e1dc; --grid: #ecebe6;
+  --text-primary: #0b0b0b; --text-secondary: #52514e; --text-muted: #8a8984;
+  --series-1: #2a78d6;
+  --good: #0a7d3c; --warning: #a86400; --critical: #c42b2b;
+}
+@media (prefers-color-scheme: dark) {
+  :root:where(:not([data-theme="light"])) {
+    color-scheme: dark;
+    --bg: #111110; --surface-1: #1a1a19; --line: #2c2c2a; --grid: #262624;
+    --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8f8e86;
+    --series-1: #3987e5;
+    --good: #3cc47a; --warning: #e0a03a; --critical: #ff6b6b;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #111110; --surface-1: #1a1a19; --line: #2c2c2a; --grid: #262624;
+  --text-primary: #f0efec; --text-secondary: #c3c2b7; --text-muted: #8f8e86;
+  --series-1: #3987e5;
+  --good: #3cc47a; --warning: #e0a03a; --critical: #ff6b6b;
+}
+* { box-sizing: border-box; }
+body { margin: 0; background: var(--bg); color: var(--text-primary);
+  font: 14px/1.4 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif; padding: 18px 20px 40px; }
+.wrap { max-width: 1400px; margin: 0 auto; display: grid; gap: 14px; }
+header { display: flex; flex-wrap: wrap; gap: 10px 18px; align-items: baseline; justify-content: space-between; }
+h1 { font-size: 20px; margin: 0; font-weight: 650; }
+.sub { color: var(--text-secondary); font-size: 13px; font-variant-numeric: tabular-nums; }
+.muted { color: var(--text-muted); }
+.pills { display: flex; flex-wrap: wrap; gap: 8px; }
+.pill { display: inline-flex; gap: 6px; align-items: center; border: 1px solid var(--line); background: var(--surface-1);
+  border-radius: 999px; padding: 4px 10px; font-size: 13px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.pill b { font-weight: 600; color: var(--text-primary); }
+.ico { font-size: 12px; margin-right: 5px; }
+.st-good { color: var(--good); } .st-warning { color: var(--warning); } .st-critical { color: var(--critical); }
+.card { background: var(--surface-1); border: 1px solid var(--line); border-radius: 12px; padding: 14px 16px; min-width: 0; }
+.tiles { display: grid; grid-template-columns: repeat(6, minmax(0, 1fr)); gap: 14px; }
+.tile .label, .card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--text-secondary); margin: 0 0 6px; font-weight: 600; }
+.tile .value { font-size: 34px; font-weight: 700; line-height: 1.05; font-variant-numeric: tabular-nums; letter-spacing: -0.01em; }
+.tile .value small { font-size: 16px; font-weight: 600; color: var(--text-secondary); margin-left: 3px; }
+.tile .note { margin-top: 4px; font-size: 12.5px; color: var(--text-secondary); font-variant-numeric: tabular-nums; }
+.grid2 { display: grid; grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); gap: 14px; }
+.stack { display: grid; gap: 14px; }
+svg { display: block; width: 100%; height: auto; overflow: visible; }
+svg text { font: 11px system-ui, sans-serif; fill: var(--text-muted); }
+.empty { fill: var(--text-muted); font-size: 13px; }
+table { width: 100%; border-collapse: collapse; font-variant-numeric: tabular-nums; font-size: 13px; }
+th, td { text-align: right; padding: 5px 8px; border-bottom: 1px solid var(--line); white-space: nowrap; }
+th:first-child, td:first-child { text-align: left; }
+th { color: var(--text-secondary); font-weight: 600; font-size: 12px; position: sticky; top: 0; background: var(--surface-1); }
+.scroll { max-height: 360px; overflow: auto; }
+.bar { display: inline-block; height: 8px; border-radius: 0 4px 4px 0; background: var(--series-1); vertical-align: middle; margin-right: 6px; }
+#tip { position: fixed; pointer-events: none; background: var(--text-primary); color: var(--surface-1); font-size: 12px;
+  padding: 5px 8px; border-radius: 6px; white-space: pre; opacity: 0; transition: opacity .08s; z-index: 10; font-variant-numeric: tabular-nums; }
+code { font-size: 12.5px; }
+@media (max-width: 1100px) { .tiles { grid-template-columns: repeat(3, minmax(0, 1fr)); } .grid2 { grid-template-columns: 1fr; } }
+@media (max-width: 600px) { .tiles { grid-template-columns: repeat(2, minmax(0, 1fr)); } body { padding: 12px 16px 30px; } }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <header>
+    <div>
+      <h1>LR-FHSS range monitor</h1>
+      <div class="sub" id="hdr">connecting…</div>
+    </div>
+    <div class="pills">
+      <span class="pill" id="pRx"></span>
+      <span class="pill" id="pPush"></span>
+      <span class="pill" id="pPhone"></span>
+    </div>
+  </header>
+
+  <div class="tiles">
+    <div class="card tile"><div class="label">Distance now</div><div class="value" id="tDist">--</div><div class="note" id="nDist"></div></div>
+    <div class="card tile"><div class="label">Last packet</div><div class="value" id="tAge">--</div><div class="note" id="nAge"></div></div>
+    <div class="card tile"><div class="label">SNR</div><div class="value" id="tSnr">--</div><div class="note" id="nSnr"></div></div>
+    <div class="card tile"><div class="label">Delivery, last 2 min</div><div class="value" id="tPdr">--</div><div class="note" id="nPdr"></div></div>
+    <div class="card tile"><div class="label">Received</div><div class="value" id="tRx">--</div><div class="note" id="nRx"></div></div>
+    <div class="card tile"><div class="label">Farthest packet</div><div class="value" id="tFar">--</div><div class="note" id="nFar"></div></div>
+  </div>
+
+  <div class="grid2">
+    <div class="stack">
+      <div class="card"><h2>Distance from start</h2><div id="cDist"></div></div>
+      <div class="card"><h2>Packet SNR (dB)</h2><div id="cSnr"></div></div>
+    </div>
+    <div class="stack">
+      <div class="card"><h2>SNR vs distance</h2><div id="cScatter"></div></div>
+      <div class="card"><h2>Packet delivery by distance</h2><div class="scroll" style="max-height:300px">
+        <table id="bins"><thead><tr><th>Distance</th><th>Time</th><th>Rx / exp</th><th>PDR</th><th>Mean SNR</th></tr></thead><tbody></tbody></table></div></div>
+    </div>
+  </div>
+
+  <div class="grid2">
+    <div class="card"><h2>Packets</h2><div class="scroll">
+      <table id="pkts"><thead><tr><th>#</th><th>On air</th><th>Distance</th><th>SNR</th><th>Temp</th><th>Payload</th></tr></thead><tbody></tbody></table></div></div>
+    <div class="card"><h2>Marks and logs</h2>
+      <table id="marks"><thead><tr><th>Time</th><th>Distance</th><th>Note</th></tr></thead><tbody></tbody></table>
+      <p class="sub" style="margin-top:14px">Logging to <code id="dir"></code></p>
+      <p class="sub muted">packets.csv · packets_with_distance.csv · results_by_distance.csv · summary.json · phone_track.csv · marks.csv</p>
+    </div>
+  </div>
+</div>
+<div id="tip"></div>
+
+<script>
+'use strict';
+const $ = id => document.getElementById(id);
+const fmt = (v, d = 0, u = '') => v == null || isNaN(v) ? '--' : (+v).toFixed(d) + u;
+const hms = t => new Date(t * 1000).toTimeString().slice(0, 8);
+const esc = s => String(s).replace(/[&<>"]/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;' }[c]));
+let S = null;
+
+// ---------------------------------------------------------------- tooltip
+const tip = $('tip');
+document.addEventListener('mousemove', e => {
+  const t = e.target.closest('[data-tip]');
+  if (!t) { tip.style.opacity = 0; return; }
+  tip.textContent = t.getAttribute('data-tip');
+  tip.style.opacity = 1;
+  const x = Math.min(e.clientX + 14, innerWidth - tip.offsetWidth - 8);
+  tip.style.left = x + 'px'; tip.style.top = (e.clientY + 14) + 'px';
+});
+
+// ---------------------------------------------------------------- charts
+function niceTicks(lo, hi, n = 5) {
+  if (!(hi > lo)) { hi = lo + 1; }
+  const raw = (hi - lo) / n, mag = 10 ** Math.floor(Math.log10(raw));
+  const step = [1, 2, 2.5, 5, 10].map(m => m * mag).find(s => s >= raw);
+  const t = []; for (let v = Math.ceil(lo / step) * step; v <= hi + 1e-9; v += step) t.push(+v.toFixed(6));
+  return t;
+}
+// frame: returns {svg string pieces, x(), y()} for a plot area with recessive axes
+function frame(el, h, xd, yd, opt = {}) {
+  const W = Math.max(320, el.clientWidth), m = { l: 44, r: 14, t: 8, b: 26 };
+  const iw = W - m.l - m.r, ih = h - m.t - m.b;
+  const x = v => m.l + (v - xd[0]) / (xd[1] - xd[0] || 1) * iw;
+  const y = v => m.t + ih - (v - yd[0]) / (yd[1] - yd[0] || 1) * ih;
+  let g = '';
+  for (const v of niceTicks(yd[0], yd[1], opt.ny || 4)) {
+    g += `<line x1="${m.l}" x2="${W - m.r}" y1="${y(v)}" y2="${y(v)}" stroke="var(--grid)"/>` +
+         `<text x="${m.l - 6}" y="${y(v) + 4}" text-anchor="end">${opt.yfmt ? opt.yfmt(v) : v}</text>`;
+  }
+  for (const v of (opt.xticks || niceTicks(xd[0], xd[1], opt.nx || 6))) {
+    g += `<text x="${x(v)}" y="${h - 6}" text-anchor="middle">${opt.xfmt ? opt.xfmt(v) : v}</text>`;
+  }
+  g += `<line x1="${m.l}" x2="${W - m.r}" y1="${m.t + ih}" y2="${m.t + ih}" stroke="var(--line)"/>`;
+  return { W, h, x, y, g, m, iw, ih };
+}
+function timeTicks(t0, t1) {
+  const span = t1 - t0, step = [30, 60, 120, 300, 600, 900, 1800, 3600, 7200].find(s => span / s <= 7) || 7200;
+  const out = []; for (let t = Math.ceil(t0 / step) * step; t <= t1; t += step) out.push(t);
+  return out;
+}
+const hm = t => new Date(t * 1000).toTimeString().slice(0, 5);
+
+function timeDomain(s) {
+  // this relay run only (older phone track from before it is left out)
+  const t1 = s.now, first = s.packets.length ? s.packets[0].t : t1;
+  return [Math.min(t1 - 120, first, s.t0), t1];
+}
+
+function drawDist(s) {
+  const el = $('cDist'), td = timeDomain(s), tr = s.track.filter(p => p[0] >= td[0]);
+  if (!tr.length) { el.innerHTML = `<svg viewBox="0 0 600 60"><text class="empty" x="0" y="30">No phone track yet. Set the start point in the phone app and walk.</text></svg>`; return; }
+  const dmax = Math.max(20, ...tr.map(p => p[1])) * 1.1;
+  const f = frame(el, 190, td, [0, dmax], { xticks: timeTicks(...td), xfmt: hm, yfmt: v => v + ' m' });
+  const pts = tr.map(p => `${f.x(p[0]).toFixed(1)},${f.y(p[1]).toFixed(1)}`).join(' ');
+  let h = f.g + `<polyline fill="none" stroke="var(--series-1)" stroke-width="2" stroke-linejoin="round" points="${pts}"/>`;
+  for (const mk of s.marks) if (mk.t >= td[0]) h += `<line x1="${f.x(mk.t)}" x2="${f.x(mk.t)}" y1="${f.m.t}" y2="${f.m.t + f.ih}" stroke="var(--text-muted)" stroke-dasharray="3 3" data-tip="mark ${hms(mk.t)}\n${fmt(mk.dist, 0, ' m')}  ${esc(mk.note || '')}"/>`;
+  // hover targets (wide, invisible) on a thinned set of points
+  const step = Math.max(1, Math.floor(tr.length / 120));
+  for (let i = 0; i < tr.length; i += step) h += `<circle cx="${f.x(tr[i][0])}" cy="${f.y(tr[i][1])}" r="8" fill="transparent" data-tip="${hms(tr[i][0])}\n${tr[i][1].toFixed(1)} m"/>`;
+  const last = tr[tr.length - 1];
+  h += `<circle cx="${f.x(last[0])}" cy="${f.y(last[1])}" r="4.5" fill="var(--series-1)" stroke="var(--surface-1)" stroke-width="2"/>`;
+  el.innerHTML = `<svg viewBox="0 0 ${f.W} ${f.h}" role="img" aria-label="Distance from start over time">${h}</svg>`;
+}
+
+function drawSnr(s) {
+  const el = $('cSnr'), td = timeDomain(s), P = s.packets.filter(p => p.t >= td[0] && p.snr != null);
+  if (!P.length) { el.innerHTML = `<svg viewBox="0 0 600 60"><text class="empty" x="0" y="30">Waiting for packets…</text></svg>`; return; }
+  const lo = Math.min(-10, ...P.map(p => p.snr)) - 1, hi = Math.max(15, ...P.map(p => p.snr)) + 1;
+  const f = frame(el, 170, td, [lo, hi], { xticks: timeTicks(...td), xfmt: hm });
+  let h = f.g + `<line x1="${f.m.l}" x2="${f.W - f.m.r}" y1="${f.y(0)}" y2="${f.y(0)}" stroke="var(--text-muted)" stroke-width="1"/>`;
+  for (const p of P) h += `<circle cx="${f.x(p.t).toFixed(1)}" cy="${f.y(p.snr).toFixed(1)}" r="4" fill="var(--series-1)" stroke="var(--surface-1)" stroke-width="2"/>` +
+    `<circle cx="${f.x(p.t).toFixed(1)}" cy="${f.y(p.snr).toFixed(1)}" r="9" fill="transparent" data-tip="#${p.id}  ${hms(p.t)}\nSNR ${p.snr.toFixed(1)} dB\n${fmt(p.dist, 0, ' m')}"/>`;
+  el.innerHTML = `<svg viewBox="0 0 ${f.W} ${f.h}" role="img" aria-label="Packet SNR over time">${h}</svg>`;
+}
+
+function drawScatter(s) {
+  const el = $('cScatter'), P = s.packets.filter(p => p.dist != null && p.snr != null);
+  if (!P.length) { el.innerHTML = `<svg viewBox="0 0 400 60"><text class="empty" x="0" y="30">Needs packets with a phone distance.</text></svg>`; return; }
+  const dmax = Math.max(20, ...P.map(p => p.dist)) * 1.1;
+  const lo = Math.min(-10, ...P.map(p => p.snr)) - 1, hi = Math.max(15, ...P.map(p => p.snr)) + 1;
+  const f = frame(el, 230, [0, dmax], [lo, hi], { xfmt: v => v + ' m' });
+  let h = f.g + `<line x1="${f.m.l}" x2="${f.W - f.m.r}" y1="${f.y(0)}" y2="${f.y(0)}" stroke="var(--text-muted)"/>`;
+  for (const p of P) h += `<circle cx="${f.x(p.dist).toFixed(1)}" cy="${f.y(p.snr).toFixed(1)}" r="4" fill="var(--series-1)" fill-opacity=".75" stroke="var(--surface-1)" stroke-width="1.5" data-tip="#${p.id}  ${hms(p.t)}\n${p.dist.toFixed(0)} m, SNR ${p.snr.toFixed(1)} dB"/>`;
+  el.innerHTML = `<svg viewBox="0 0 ${f.W} ${f.h}" role="img" aria-label="SNR versus distance">${h}</svg>`;
+}
+
+// ---------------------------------------------------------------- render
+function status(cls, icon, text) { return `<span class="ico ${cls}">${icon}</span>${text}`; }
+
+function render() {
+  const s = S; if (!s) return;
+  const rx = s.rx || {}, now = s.now;
+  $('hdr').textContent = `run ${s.run} · carrier ${s.carrier_mhz.toFixed(3)} MHz · tag every ${s.period} s · RX ${rx.gain || '-'} · tone ${fmt(rx.tone_hz, 0, ' Hz')}`;
+  // pills: icon + label, never colour alone
+  $('pRx').innerHTML = rx.ok === false ? status('st-critical', '✕', '<b>Receiver stopped</b> ' + esc(rx.error || ''))
+    : (rx.overflows || rx.overruns) ? status('st-warning', '!', `<b>Receiver</b> ${rx.overflows || 0} overflows`)
+    : status('st-good', '●', `<b>Receiver</b> running`);
+  const pa = s.push && s.push.t ? now - s.push.t : null;
+  $('pPush').innerHTML = !s.push || !s.push.t ? status('st-warning', '…', '<b>GitHub</b> not pushed yet')
+    : s.push.ok === false ? status('st-critical', '✕', '<b>GitHub</b> push failed')
+    : status(pa < 90 ? 'st-good' : 'st-warning', pa < 90 ? '●' : '!', `<b>GitHub</b> pushed ${fmt(pa, 0, ' s')} ago`);
+  const fa = s.phone ? now - s.phone.t : null;
+  $('pPhone').innerHTML = !s.phone ? status('st-warning', '…', '<b>Phone</b> no track yet')
+    : status(fa < 90 ? 'st-good' : 'st-warning', fa < 90 ? '●' : '!', `<b>Phone</b> fix ${fmt(fa, 0, ' s')} old`);
+  // tiles
+  $('tDist').innerHTML = s.phone ? `${s.phone.dist.toFixed(0)}<small>m</small>` : '--';
+  $('nDist').textContent = s.phone ? `bearing ${fmt(s.phone.brg, 0, '°')} · GPS ±${fmt(s.phone.acc, 0)} m · ${fmt(fa, 0)} s ago` : 'from the phone app';
+  const P = s.packets, p0 = P[P.length - 1];
+  const age = p0 ? now - p0.t : null, per = s.period;
+  $('tAge').innerHTML = age == null ? '--' : `${age.toFixed(0)}<small>s</small>`;
+  const ageState = age == null ? null : age < per * 1.6 + 4 ? ['st-good', '●', 'on time'] : age < per * 3 + 4 ? ['st-warning', '!', 'late'] : ['st-critical', '✕', 'missing'];
+  $('nAge').innerHTML = ageState ? status(ageState[0], ageState[1], `${ageState[2]} · #${p0.id} at ${hms(p0.t)}`) : 'waiting';
+  $('tSnr').innerHTML = p0 && p0.snr != null ? `${p0.snr.toFixed(1)}<small>dB</small>` : '--';
+  const last10 = P.slice(-10).filter(p => p.snr != null).map(p => p.snr);
+  $('nSnr').textContent = last10.length ? `mean of last ${last10.length}: ${(last10.reduce((a, b) => a + b, 0) / last10.length).toFixed(1)} dB` : '';
+  $('tPdr').innerHTML = s.pdr2 == null ? '--' : `${Math.round(s.pdr2 * 100)}<small>%</small>`;
+  $('nPdr').innerHTML = s.pdr2 == null ? 'needs 2 periods' : s.pdr2 >= .9 ? status('st-good', '●', 'good') : s.pdr2 >= .5 ? status('st-warning', '!', 'losing packets') : status('st-critical', '✕', 'mostly lost');
+  const sm = s.summary;
+  $('tRx').textContent = sm.received;
+  $('nRx').textContent = `of ~${sm.expected} sent · ${sm.packets_with_distance} with distance`;
+  $('tFar').innerHTML = sm.farthest_packet_m ? `${sm.farthest_packet_m.toFixed(0)}<small>m</small>` : '--';
+  $('nFar').textContent = sm.farthest_bin_pdr90_m ? `≥90% delivery out to ${sm.farthest_bin_pdr90_m} m` : 'needs phone distances';
+  // tables
+  const binMax = Math.max(1, ...s.bins.map(b => b.rx));
+  $('bins').tBodies[0].innerHTML = s.bins.map(b => {
+    const st = b.pdr == null ? '' : b.pdr >= .9 ? 'st-good' : b.pdr >= .5 ? 'st-warning' : 'st-critical';
+    return `<tr><td>${b.d0}–${b.d1} m</td><td>${b.secs.toFixed(0)} s</td><td><span class="bar" style="width:${(b.rx / binMax * 60).toFixed(0)}px"></span>${b.rx} / ${b.exp.toFixed(0)}</td>` +
+      `<td class="${st}">${b.pdr == null ? '--' : Math.round(b.pdr * 100) + '%'}</td><td>${fmt(b.snr_mean, 1)}</td></tr>`;
+  }).join('') || '<tr><td colspan="5" class="muted">Fills in as the phone reports distance.</td></tr>';
+  $('pkts').tBodies[0].innerHTML = P.slice(-60).reverse().map(p =>
+    `<tr><td>${p.id}</td><td>${hms(p.t)}</td><td>${fmt(p.dist, 0, ' m')}</td><td>${fmt(p.snr, 1)}</td><td>${p.temp != null ? p.temp.toFixed(2) + ' °C' : '--'}</td><td><code>${p.hex}</code></td></tr>`).join('');
+  $('marks').tBodies[0].innerHTML = s.marks.slice().reverse().map(m =>
+    `<tr><td>${hms(m.t)}</td><td>${fmt(m.dist, 0, ' m')}</td><td style="text-align:left">${esc(m.note || '')}</td></tr>`).join('') ||
+    '<tr><td colspan="3" class="muted">Tap “Mark point” in the phone app.</td></tr>';
+  $('dir').textContent = s.dir;
+  drawDist(s); drawSnr(s); drawScatter(s);
+}
+
+async function poll() {
+  try {
+    const r = await fetch('/api/state', { cache: 'no-store' });
+    S = await r.json(); render();
+  } catch (e) { $('hdr').textContent = 'relay not reachable: is pc/relay.py running?'; }
+}
+poll(); setInterval(poll, 2000);
+addEventListener('resize', render);
+</script>
+</body>
+</html>

@@ -49,8 +49,10 @@ HEADER_REPLICAS = 3
 
 PUSH_MIN_S = 8                # never push live/ faster than this
 HEARTBEAT_S = 45              # push even without packets, so the phone sees the PC alive
-MERGE_S = 60                  # pull the phone's track this often
+MERGE_S = 20                  # pull the phone's track this often
 KEEP_PACKETS = 150            # packets kept in packets.json
+BIN_M = 25                    # distance bin for the results table
+GUI_PORT = 8765               # local dashboard: http://localhost:8765
 
 
 def iso(t):
@@ -188,11 +190,21 @@ class Session:
                 if t >= self.t0 - 600:
                     fx.append((t, f[1], f[2], f[3], tr.get('run', name)))
         fx.sort()
+        uniq = []                                   # chunked uploads can overlap
+        for f in fx:
+            if not uniq or f[0] != uniq[-1][0]:
+                uniq.append(f)
+        marks = {}
+        for name, tr in tracks.items():
+            for m in tr.get('marks', []):
+                if m[0]/1000.0 >= self.t0 - 600:
+                    marks[m[0]] = (m[0]/1000.0, m[1], m[2], tr.get('run', name))
         with self.lock:
-            self.track = fx
-            self.marks = [(m[0]/1000.0, m[1], m[2], tr.get('run', name))
-                          for name, tr in tracks.items() for m in tr.get('marks', []) if m[0]/1000.0 >= self.t0 - 600]
+            self.track = uniq
+            self.marks = sorted(marks.values())
+            self.merged_at = time.time()
         self.write_merged()
+        self.write_results()
 
     def dist_at(self, t, max_gap=15.0):
         tr = self.track
@@ -231,6 +243,82 @@ class Session:
             w.writerow(['time', 'time_unix', 'dist_m', 'note', 'phone_run'])
             for t, d, n, r in getattr(self, 'marks', []):
                 w.writerow([iso(t), '%.3f' % t, d, n, r])
+
+    # --- range results: packet delivery and SNR per distance bin
+    def results(self):
+        with self.lock:
+            tr, pk = list(self.track), list(self.packets)
+        bins = {}
+        b = lambda d: bins.setdefault(int(d // BIN_M), dict(secs=0.0, rx=0, snrs=[]))
+        for (t0, d0, *_), (t1, *_r) in zip(tr, tr[1:]):          # time spent at each distance
+            if t0 >= self.t0:
+                b(d0)['secs'] += min(t1 - t0, self.period)
+        rows, with_d = [], []
+        for p in pk:
+            d = self.dist_at(p['t'])
+            if d is not None:
+                with_d.append((p, d[0]))
+                bb = b(d[0])
+                bb['rx'] += 1
+                if p['snr'] is not None:
+                    bb['snrs'].append(p['snr'])
+        for k in sorted(bins):
+            v = bins[k]
+            exp = v['secs']/self.period
+            rows.append(dict(d0=k*BIN_M, d1=(k + 1)*BIN_M, secs=round(v['secs'], 1), exp=round(exp, 1),
+                             rx=v['rx'], pdr=round(min(1.0, v['rx']/exp), 3) if exp >= 1 else None,
+                             snr_mean=round(sum(v['snrs'])/len(v['snrs']), 1) if v['snrs'] else None,
+                             snr_min=min(v['snrs']) if v['snrs'] else None))
+        good = [r for r in rows if r['pdr'] is not None and r['pdr'] >= 0.9]
+        summary = dict(run=self.run, started=iso(self.t0), updated=iso(time.time()),
+                       carrier_mhz=CENTER_MHZ, tag_period_s=self.period, bin_m=BIN_M,
+                       received=len(pk), expected=round((time.time() - self.t0)/self.period),
+                       packets_with_distance=len(with_d),
+                       farthest_packet_m=round(max((d for _, d in with_d), default=0), 1) or None,
+                       farthest_bin_pdr90_m=good[-1]['d1'] if good else None,
+                       receiver=dict(self.rx))
+        return rows, summary
+
+    def write_results(self):
+        rows, summary = self.results()
+        with open(os.path.join(self.dir, 'results_by_distance.csv'), 'w', newline='') as f:
+            w = csv.writer(f)
+            w.writerow(['dist_from_m', 'dist_to_m', 'time_s', 'expected', 'received', 'pdr',
+                        'snr_mean_db', 'snr_min_db'])
+            for r in rows:
+                w.writerow([r['d0'], r['d1'], r['secs'], r['exp'], r['rx'],
+                            '' if r['pdr'] is None else r['pdr'],
+                            '' if r['snr_mean'] is None else r['snr_mean'],
+                            '' if r['snr_min'] is None else r['snr_min']])
+        with open(os.path.join(self.dir, 'summary.json'), 'w') as f:
+            json.dump(summary, f, indent=2)
+
+    # --- everything the local dashboard draws
+    def gui_state(self):
+        rows, summary = self.results()
+        now = time.time()
+        with self.lock:
+            pk = list(self.packets)
+            tr = list(self.track)
+            marks = list(getattr(self, 'marks', []))
+        packets = []
+        for p in pk[-400:]:
+            d = self.dist_at(p['t'])
+            packets.append(dict(p, dist=None if d is None else round(d[0], 1),
+                                acc=None if d is None else d[2]))
+        step = max(1, len(tr)//600)
+        last = tr[-1] if tr else None
+        lag, win = 6.0, 120.0
+        n = sum(1 for p in pk if now - lag - win <= p['t'] < now - lag)
+        span = min(win, max(0.0, now - lag - self.t0))
+        return dict(now=now, t0=self.t0, run=self.run, dir=self.dir, carrier_mhz=CENTER_MHZ, period=self.period,
+                    rx=dict(self.rx), push=getattr(self, 'push_info', {}),
+                    merged_at=getattr(self, 'merged_at', None),
+                    phone=None if not last else dict(t=last[0], dist=last[1], brg=last[2], acc=last[3]),
+                    pdr2=(min(1.0, n/(span/self.period)) if span >= 2*self.period else None),
+                    packets=packets, track=[[round(t, 1), d] for t, d, *_ in tr[::step]],
+                    marks=[dict(t=t, dist=d, note=nt) for t, d, nt, _ in marks],
+                    bins=rows, summary=summary)
 
 
 # ------------------------------------------------------------------ receivers
@@ -331,6 +419,8 @@ def main():
     ap.add_argument('--period', type=float, default=5.0, help='tag packet period, s')
     ap.add_argument('--simulate', action='store_true', help='fake packets, no radio')
     ap.add_argument('--centre', type=float, default=CENTER_MHZ, help='carrier frequency, MHz')
+    ap.add_argument('--gui-port', type=int, default=GUI_PORT, help='local dashboard port')
+    ap.add_argument('--no-browser', action='store_true', help='do not open the dashboard')
     a = ap.parse_args()
     globals()['CENTER_MHZ'] = a.centre
 
@@ -351,26 +441,30 @@ def main():
                 relay.push_live(sess.payload())
                 last = time.time()
                 sess.rx.pop('push_error', None)
+                sess.push_info = dict(t=last, ok=True, count=relay.pushes)
             except Exception as e:
                 log('push failed: %s' % e)
                 sess.rx['push_error'] = str(e)[:200]
+                sess.push_info = dict(t=time.time(), ok=False, error=str(e)[:200], count=relay.pushes)
                 time.sleep(5)
 
     def merger():
+        seen = None
         while True:
-            time.sleep(MERGE_S)
             try:
-                tr = relay.phone_tracks()
-                sess.set_track(tr)
-                if sess.track:
+                sess.set_track(relay.phone_tracks())
+                if sess.track and sess.track[-1][0] != seen:
                     t, d, b, acc, r = sess.track[-1]
-                    log('phone: %.0f m from start (bearing %s, ±%s m), %.0f s ago'
+                    seen = t
+                    log('phone: %.0f m from start (bearing %s, ±%s m), fix %.0f s old'
                         % (d, b, acc, time.time() - t))
             except Exception as e:
                 log('merge failed: %s' % e)
+            time.sleep(MERGE_S)
 
     threading.Thread(target=pusher, daemon=True).start()
     threading.Thread(target=merger, daemon=True).start()
+    start_gui(sess, a.gui_port, not a.no_browser)
     log('relaying to %s (branch live). Ctrl-C to stop.' % a.remote)
     try:
         while True:
@@ -382,10 +476,49 @@ def main():
             sess.set_track(relay.phone_tracks())
         except Exception:
             pass
+        sess.write_results()
         if rcv:
             log(rcv.summary())
             rcv.close()
         log('logs: %s' % sess.dir)
+
+
+# ------------------------------------------------------------------ local GUI
+def start_gui(sess, port, open_browser):
+    """Dashboard on http://localhost:<port> (this PC only)."""
+    from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+    page = os.path.join(HERE, 'dashboard.html')
+
+    class H(BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_GET(self):
+            if self.path.startswith('/api/state'):
+                body, ctype = json.dumps(sess.gui_state()).encode(), 'application/json'
+            elif self.path in ('/', '/index.html'):
+                body, ctype = open(page, 'rb').read(), 'text/html; charset=utf-8'
+            else:
+                self.send_error(404)
+                return
+            self.send_response(200)
+            self.send_header('Content-Type', ctype)
+            self.send_header('Content-Length', str(len(body)))
+            self.send_header('Cache-Control', 'no-store')
+            self.end_headers()
+            self.wfile.write(body)
+
+    try:
+        srv = ThreadingHTTPServer(('127.0.0.1', port), H)
+    except OSError as e:
+        log('dashboard not started (port %d: %s)' % (port, e))
+        return
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    url = 'http://localhost:%d/' % port
+    log('dashboard: %s' % url)
+    if open_browser:
+        import webbrowser
+        threading.Thread(target=webbrowser.open, args=(url,), daemon=True).start()
 
 
 if __name__ == '__main__':

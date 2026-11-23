@@ -269,33 +269,50 @@ function ingest(d) {
   render();
 }
 
-// upload distance-only track so the PC can log distance per packet
-let uploadSha = null, lastUpload = 0, uploading = false, uploadErr = null;
+// upload distance-only track so the PC can log distance per packet.
+// Split into 10-minute files so each upload stays small on mobile data:
+// only the current file (plus any unfinished older ones) is re-sent.
+const CHUNK_MS = 600000, UPLOAD_EVERY_MS = 20000;
+let shas = {}, finished = new Set(), lastUpload = 0, uploading = false, uploadErr = null;
+async function putJson(path, obj) {
+  const content = btoa(unescape(encodeURIComponent(JSON.stringify(obj))));
+  for (let attempt = 0; attempt < 2; attempt++) {
+    if (!shas[path]) {
+      const g = await gh('/contents/' + path + '?ref=phone');
+      if (g.ok) shas[path] = (await g.json()).sha;
+    }
+    const r = await gh('/contents/' + path, { method: 'PUT', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(Object.assign({ message: 'phone ' + path, content, branch: 'phone' }, shas[path] ? { sha: shas[path] } : {})) });
+    if (r.ok) { shas[path] = (await r.json()).content.sha; return null; }
+    if (r.status === 409 || r.status === 422) { delete shas[path]; continue; }
+    return r.status === 403 ? 'token lacks write access' : r.status === 404 ? 'phone branch missing (start the PC relay once)' : 'upload ' + r.status;
+  }
+  return 'upload conflict';
+}
 async function upload(force) {
   if (!cfg.token || uploading || !S.start) return;
-  if (!force && (!dirty || Date.now() - lastUpload < 60000)) return;
+  if (!force && (!dirty || Date.now() - lastUpload < UPLOAD_EVERY_MS)) return;
   uploading = true;
-  const path = '/contents/track/' + S.run + '.json';
-  const body = {
-    run: S.run, period_s: cfg.period, start_set: S.start.t, start_acc_m: S.start.acc, start_source: S.start.source,
-    note: 'distance-only track from the phone (no coordinates); fixes = [epoch_ms, dist_m, bearing_deg, acc_m]',
-    fixes: S.fixes.filter(f => f.t >= S.start.tms - 60000).map(f => [f.t, +distOf(f).toFixed(1), +brg(S.start.lat, S.start.lon, f.lat, f.lon).toFixed(0), +f.acc.toFixed(1)]),
-    marks: S.marks.map(m => [m.t, m.dist == null ? null : +m.dist.toFixed(1), m.note]),
-  };
-  const content = btoa(unescape(encodeURIComponent(JSON.stringify(body))));
   try {
-    for (let attempt = 0; attempt < 2; attempt++) {
-      if (!uploadSha) {
-        const g = await gh(path + '?ref=phone');
-        if (g.ok) uploadSha = (await g.json()).sha;
-      }
-      const r = await gh(path, { method: 'PUT', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(Object.assign({ message: 'phone track ' + S.run, content, branch: 'phone' }, uploadSha ? { sha: uploadSha } : {})) });
-      if (r.ok) { uploadSha = (await r.json()).content.sha; lastUpload = Date.now(); dirty = false; uploadErr = null; break; }
-      if (r.status === 409 || r.status === 422) { uploadSha = null; continue; }
-      uploadErr = r.status === 403 ? 'token lacks write access' : r.status === 404 ? 'phone branch missing (start the PC relay once)' : 'upload ' + r.status;
-      break;
+    const t0 = S.start.tms - 60000, cur = Math.floor(Date.now() / CHUNK_MS);
+    const first = Math.floor(Math.max(t0, S.fixes.length ? S.fixes[0].t : t0) / CHUNK_MS);
+    let err = null;
+    for (let c = Math.max(first, cur - 18); c <= cur && !err; c++) {
+      const key = S.run + '_c' + c;
+      if (c < cur && finished.has(key)) continue;
+      const lo = c * CHUNK_MS, hi = lo + CHUNK_MS;
+      const fx = S.fixes.filter(f => f.t >= Math.max(lo, t0) && f.t < hi);
+      if (!fx.length && c < cur) { finished.add(key); continue; }
+      err = await putJson('track/' + key + '.json', {
+        run: S.run, chunk: c, period_s: cfg.period, start_set: S.start.t, start_acc_m: S.start.acc, start_source: S.start.source,
+        note: 'distance-only track from the phone (no coordinates); fixes = [epoch_ms, dist_m, bearing_deg, acc_m]',
+        fixes: fx.map(f => [f.t, +distOf(f).toFixed(1), +brg(S.start.lat, S.start.lon, f.lat, f.lon).toFixed(0), +f.acc.toFixed(1)]),
+        marks: S.marks.filter(m => m.t >= lo && m.t < hi).map(m => [m.t, m.dist == null ? null : +m.dist.toFixed(1), m.note]),
+      });
+      if (!err && c < cur) finished.add(key);
     }
+    uploadErr = err;
+    if (!err) { lastUpload = Date.now(); dirty = false; }
   } catch (e) { uploadErr = 'offline'; }
   uploading = false;
 }
@@ -454,7 +471,7 @@ $('bMark').onclick = () => {
 };
 $('bNew').onclick = () => {
   if (!confirm('Start a new run? Keeps the start point; clears packets, track and marks on this phone (download the CSV first).')) return;
-  upload(true).finally(() => { const st = S.start; S = newState(); S.start = st && Object.assign({}, st, { tms: Date.now() }); uploadSha = null; save(); render(); });
+  upload(true).finally(() => { const st = S.start; S = newState(); S.start = st && Object.assign({}, st, { tms: Date.now() }); shas = {}; finished = new Set(); save(); render(); });
 };
 $('bExport').onclick = () => {
   const rows = [['type', 'time_iso', 'epoch_s', 'lat', 'lon', 'acc_m', 'dist_m', 'bearing_deg', 'snr_db', 'temp_c', 'payload_hex', 'pc_run', 'pkt_id', 'note']];
