@@ -342,6 +342,11 @@ def start_airspy(sess, cache):
     tone, peak = measure_tone(cache)
     log('tone %+.0f Hz from %.3f MHz, peak %.3f%s' % (tone, CENTER_MHZ, peak,
                                                       '  ** CLIPPING: lower GAIN **' if peak > CLIP_PEAK else ''))
+    if peak < 0.02 or abs(tone) > 5e3:
+        # carrier missing or far away (e.g. the emitter is out in the field):
+        # tune to the nominal frequency; the decoder absorbs the small crystal offset
+        log('carrier not found near %.3f MHz: using the nominal frequency (offset 0 Hz)' % CENTER_MHZ)
+        tone = 0.0
     config.retune(BW_KHZ*1e3, hdr_count=HEADER_REPLICAS, fs_capture=FS_CAPTURE)
     from lrfhss.sdr import LiveReceiver
 
