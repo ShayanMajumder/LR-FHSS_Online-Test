@@ -39,7 +39,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 DEFAULT_REMOTE = 'git@github.com:ShayanMajumder/LR-FHSS_Online-Test.git'
 
 # ---- receiver settings (same as pylrfhss_rx.py in the tag project)
-CENTER_MHZ = 868.0            # carrier tone
+CENTER_MHZ = 864.0            # carrier tone (LilyGO CW, integer-N, best tag dGamma in EU band)
 FS_CAPTURE = 3e6              # Airspy Mini: 3 or 6 MS/s
 GAIN = dict(lna=14, mix=10, vga=3)   # swept 2026-11-23: best SNR without ADC clipping
 CLIP_PEAK = 0.45              # Airspy float IQ: ADC full scale shows as ~0.5
@@ -330,7 +330,9 @@ def main():
                     help='bare clone used for pushing')
     ap.add_argument('--period', type=float, default=5.0, help='tag packet period, s')
     ap.add_argument('--simulate', action='store_true', help='fake packets, no radio')
+    ap.add_argument('--centre', type=float, default=CENTER_MHZ, help='carrier frequency, MHz')
     a = ap.parse_args()
+    globals()['CENTER_MHZ'] = a.centre
 
     relay = Relay(a.remote, a.cache)
     sess = Session(a.logdir, a.period)
