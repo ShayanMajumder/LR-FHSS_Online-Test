@@ -1,0 +1,1 @@
+{"run":"20261123-142501","chunk":2992408,"period_s":5,"start_set":"2026-11-23T14:25:18.558Z","start_acc_m":9.217000007629395,"start_source":"gps-avg-15s","note":"distance-only track from the phone (no coordinates); fixes = [epoch_ms, dist_m, bearing_deg, acc_m]","fixes":[[1795445037286,54.3,321,13.5],[1795445041716,55.5,318,23.6],[1795445042736,56,317,33.8]],"marks":[]}
