@@ -352,13 +352,15 @@ function render() {
   $('startInfo').textContent = S.start ? 'start ' + new Date(S.start.tms).toTimeString().slice(0, 5) : 'no start point';
   $('run').textContent = 'run ' + S.run;
   // last packet
-  const p0 = P[0], per = cfg.period, now = Date.now() / 1000;
+  // judge age and PDR against the newest data we have (the PC's last push),
+  // not the wall clock, so slow polling does not look like packet loss
+  const p0 = P[0], per = cfg.period, now = pc ? Math.min(Date.now() / 1000, pc.updated) : Date.now() / 1000;
   const age = p0 ? now - p0.t : null;
   $('age').textContent = age == null ? '--' : age.toFixed(0);
-  $('age').className = 'mid ' + (age == null ? '' : age < per * 1.6 + 15 ? 'ok' : age < per * 3 + 15 ? 'warn' : 'bad');
+  $('age').className = 'mid ' + (age == null ? '' : age < per * 1.6 + 4 ? 'ok' : age < per * 3 + 4 ? 'warn' : 'bad');
   $('snr').textContent = p0 ? fmt(p0.snr, 1) : '--';
   // PDR over the last 2 min, lagged by the relay delay
-  const lag = 20, win = 120, t0 = S.start ? S.start.tms / 1000 : (S.fixes[0] ? S.fixes[0].t / 1000 : now);
+  const lag = 4, win = 120, t0 = S.start ? S.start.tms / 1000 : (S.fixes[0] ? S.fixes[0].t / 1000 : now);
   const span = Math.min(win, Math.max(0, now - lag - t0));
   const n = P.filter(p => p.t >= now - lag - win && p.t < now - lag).length, exp = span / per;
   const pdr = exp >= 2 ? Math.min(1, n / exp) : null;
